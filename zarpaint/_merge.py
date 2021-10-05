@@ -1,27 +1,22 @@
 import numpy as np
 from magicgui import magic_factory
-from skimage.morphology import octahedron
-from skimage.segmentation import watershed
 from ._points_util import slice_points
 from profilehooks import profile
 
 
 @magic_factory(
-        call_button='Split',
+        call_button='Merge',
         viewer={'visible': False},
         ndim={'min': 2, 'max': 3},
-        compactness={'min': 0, 'step': 50},
-        radius={'min': 1},
         )
-def watershed_split(
+def merge_labels(
         viewer: 'napari.viewer.Viewer',
         labels: 'napari.layers.Labels',
         points: 'napari.layers.Points',
         ndim: int = 3,
-        compactness: int = 200,
-        radius: int = 7,
         ):
-    """Execute watershed to split labels based on provided points.
+
+    """Merge labels based on provided points.
 
     Only labels containing points will be modified. The operation will be
     performed in-place on the input Labels layer.
@@ -38,6 +33,8 @@ def watershed_split(
     ndim : int in {2, 3}
         The number of dimensions for the watershed operation.
     """
+    if len(points.data) == 0:
+        return
     coord = viewer.dims.current_step
     slice_idx = coord[:-ndim]
     # find the labels corresponding to the current points in the points layer
@@ -48,46 +45,20 @@ def watershed_split(
     points_transformed = labels_world_to_data(
             points_data_to_world(points_sliced)
             ).astype(int)[:, -ndim:]
-    image = np.ones_like(labels_sliced, dtype=np.uint8)
-    labels_split = _watershed_split(
-            image,
-            labels_sliced,
-            points_transformed,
-            compactness=compactness,
-            connectivity_octahedron=radius,
-            )
-    future = labels.data[slice_idx].write(labels_split)
+
+    future = labels.data[slice_idx].write(_merge_labels(labels_sliced, points_transformed))
     future.add_done_callback(lambda _: labels.refresh())
     points.data = np.empty((0, viewer.dims.ndim), dtype=float)
 
 
-def _watershed_split(
-        image, labels, points, compactness=200, connectivity_octahedron=7
-        ):
-    """
-    Split labels with using points as markers for watershed
-    """
-    connectivity = octahedron(connectivity_octahedron)
+def _merge_labels(labels, points):
     points = np.round(points).astype(int)
     coords = tuple([points[:, i] for i in range(points.shape[1])])
     p_lab = labels[coords]
     p_lab = np.unique(p_lab)
     p_lab = p_lab[p_lab != 0]
-    # generate a mask corresponding to the labels that need to be split
-    mask = np.zeros(labels.shape, dtype=bool)
+    min_selected_lab = p_lab.min()
     for lab in p_lab:
-        where = labels == lab
-        mask = mask + where
-    # split the labels using the points (in the masked image)
-    markers = np.zeros_like(labels)
-    for i, pt in enumerate(points):
-        markers[pt] = i + 1
-    new_labels = watershed(
-            image,
-            markers=markers,
-            mask=mask,
-            compactness=compactness,
-            connectivity=connectivity,
-            )
-    labels[mask] = new_labels[mask] + labels.max()
+        labels[lab == labels] = min_selected_lab
     return labels
+
